@@ -321,7 +321,7 @@ client.on("messageCreate", async (message) => {
     await message.channel.send("https://x.com/Skarly/status/2037208078144463181");
   } else if (cmd === "!git") {
     await message.channel.send("https://github.com/skarlywarly/cockring-cakehouse");
-  } else if (cmd === "!buffs") {
+  } else if (cmd === "!buffs" || cmd === "!b") {
     try {
       const bakeries = await fetchTopBakeries();
       const ours = bakeries.find((b) => b.id === OUR_BAKERY_ID);

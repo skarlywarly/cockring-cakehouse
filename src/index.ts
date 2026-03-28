@@ -108,8 +108,13 @@ client.once("ready", () => {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (message.content.trim().toLowerCase() === "!lb") {
+  const cmd = message.content.trim().toLowerCase();
+  if (cmd === "!lb") {
     await postLeaderboard(message.channel as TextChannel);
+  } else if (cmd === "!join") {
+    await message.channel.send("https://x.com/Skarly/status/2037208078144463181");
+  } else if (cmd === "!git") {
+    await message.channel.send("https://github.com/skarlywarly/cockring-cakehouse");
   }
 });
 

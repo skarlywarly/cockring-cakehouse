@@ -9,6 +9,12 @@ import {
 const API_URL =
   "https://www.rugpullbakery.com/api/trpc/leaderboard.getTopBakeries?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22limit%22%3A15%7D%7D%7D";
 
+const SEASON_API_URL =
+  "https://www.rugpullbakery.com/api/trpc/leaderboard.getActiveSeason?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D%2C%22v%22%3A1%7D%7D%7D";
+
+const ETH_PRICE_URL =
+  "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd";
+
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 interface Bakery {
@@ -46,7 +52,25 @@ async function fetchTopBakeries(): Promise<Bakery[]> {
   return data[0].result.data.json.items.slice(0, 5);
 }
 
-function buildLeaderboardEmbed(bakeries: Bakery[]): EmbedBuilder {
+async function fetchSeasonInfo(): Promise<{ prizePoolStr: string; endTime: string }> {
+  const [seasonRes, priceRes] = await Promise.all([
+    fetch(SEASON_API_URL),
+    fetch(ETH_PRICE_URL),
+  ]);
+  const seasonData = (await seasonRes.json()) as {
+    result: { data: { json: { prizePool: string; endTime: string }[] } };
+  }[];
+  const priceData = (await priceRes.json()) as {
+    ethereum: { usd: number };
+  };
+  const season = seasonData[0].result.data.json[0];
+  const eth = Number(BigInt(season.prizePool)) / 1e18;
+  const usd = eth * priceData.ethereum.usd;
+  const prizePoolStr = `${eth.toFixed(2)} ETH ($${usd.toLocaleString("en-US", { maximumFractionDigits: 0 })})`;
+  return { prizePoolStr, endTime: season.endTime };
+}
+
+function buildLeaderboardEmbed(bakeries: Bakery[], prizePool: string, endTime: string): EmbedBuilder {
   const medals = ["🥇", "🥈", "🥉", "4.", "5."];
 
   const lines = bakeries.map((b, i) => {
@@ -70,7 +94,7 @@ function buildLeaderboardEmbed(bakeries: Bakery[]): EmbedBuilder {
 
   return new EmbedBuilder()
     .setTitle("🍰 Top 5 Bakeries")
-    .setDescription(lines.join("\n\n") || "No data available.")
+    .setDescription(`💰 Prize Pool: **${prizePool}**\n⏰ Season Ends: <t:${endTime}:R>\n\n${lines.join("\n\n") || "No data available."}`)
     .setColor(0xf5a623)
     .setFooter({ text: "rugpullbakery.com" })
     .setTimestamp();
@@ -78,8 +102,11 @@ function buildLeaderboardEmbed(bakeries: Bakery[]): EmbedBuilder {
 
 async function postLeaderboard(channel: TextChannel): Promise<void> {
   try {
-    const bakeries = await fetchTopBakeries();
-    const embed = buildLeaderboardEmbed(bakeries);
+    const [bakeries, { prizePoolStr, endTime }] = await Promise.all([
+      fetchTopBakeries(),
+      fetchSeasonInfo(),
+    ]);
+    const embed = buildLeaderboardEmbed(bakeries, prizePoolStr, endTime);
     await channel.send({ embeds: [embed] });
   } catch (err) {
     console.error("Failed to fetch leaderboard:", err);

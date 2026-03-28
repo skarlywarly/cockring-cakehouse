@@ -119,7 +119,9 @@ function buildLeaderboardEmbed(bakeries: Bakery[], prizePool: string, endTime: s
     let rate = 1;
     for (const buff of b.activeBuffs) rate *= buff.multiplierBps / 10000;
     for (const debuff of b.activeDebuffs) rate *= 1 - debuff.debuffBps / 10000;
-    const rateStr = rate.toFixed(2) + "x";
+    const pct = Math.round((rate - 1) * 100);
+    const pctStr = pct >= 0 ? `+${pct}%` : `${pct}%`;
+    const rateStr = `${rate.toFixed(2)}x (${pctStr})`;
     const cookies = Math.round(Number(BigInt(b.txCount)) / 10000);
     const cookiesStr =
       cookies >= 1_000_000

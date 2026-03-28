@@ -43,8 +43,8 @@ interface Bakery {
   memberCount: number;
   activeCookCount: number;
   txCount: string;
-  activeBuffs: { name: string; multiplierBps: number }[];
-  activeDebuffs: { name: string; debuffBps: number }[];
+  activeBuffs: { name: string; multiplierBps: number; endTime: string }[];
+  activeDebuffs: { name: string; debuffBps: number; endTime: string }[];
 }
 
 interface TrpcBatchResponse {
@@ -237,6 +237,51 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
   }
 }
 
+const warnedExpiries = new Set<string>();
+
+async function checkExpiringSoon(channel: TextChannel): Promise<void> {
+  try {
+    const bakeries = await fetchTopBakeries();
+    const ours = bakeries.find((b) => b.id === OUR_BAKERY_ID);
+    if (!ours) return;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const fiveMin = 5 * 60;
+
+    const expiring: { name: string; type: "buff" | "debuff"; endTime: string }[] = [];
+
+    for (const buff of ours.activeBuffs) {
+      const end = Number(buff.endTime);
+      const key = `buff:${buff.name}:${buff.endTime}`;
+      if (end > nowSec && end - nowSec <= fiveMin && !warnedExpiries.has(key)) {
+        expiring.push({ name: buff.name, type: "buff", endTime: buff.endTime });
+        warnedExpiries.add(key);
+      }
+    }
+
+    for (const debuff of ours.activeDebuffs) {
+      const end = Number(debuff.endTime);
+      const key = `debuff:${debuff.name}:${debuff.endTime}`;
+      if (end > nowSec && end - nowSec <= fiveMin && !warnedExpiries.has(key)) {
+        expiring.push({ name: debuff.name, type: "debuff", endTime: debuff.endTime });
+        warnedExpiries.add(key);
+      }
+    }
+
+    for (const e of expiring) {
+      const icon = e.type === "buff" ? "⚠️ ⬆️" : "⚠️ 🔻";
+      const label = e.type === "buff" ? "Buff" : "Debuff";
+      const embed = new EmbedBuilder()
+        .setDescription(`${icon} ${label} **${e.name}** expiring <t:${e.endTime}:R>`)
+        .setColor(e.type === "buff" ? 0xf39c12 : 0x27ae60)
+        .setTimestamp();
+      await channel.send({ embeds: [embed] });
+    }
+  } catch (err) {
+    console.error("Failed to check expiring buffs/debuffs:", err);
+  }
+}
+
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
@@ -259,6 +304,8 @@ client.once("ready", async () => {
   // Set baseline so we don't replay old events on startup
   await pollActivityFeed(channel);
   setInterval(() => pollActivityFeed(channel), FEED_POLL_MS);
+
+  setInterval(() => checkExpiringSoon(channel), FEED_POLL_MS);
 });
 
 client.on("messageCreate", async (message) => {
@@ -270,6 +317,33 @@ client.on("messageCreate", async (message) => {
     await message.channel.send("https://x.com/Skarly/status/2037208078144463181");
   } else if (cmd === "!git") {
     await message.channel.send("https://github.com/skarlywarly/cockring-cakehouse");
+  } else if (cmd === "!buffs") {
+    try {
+      const bakeries = await fetchTopBakeries();
+      const ours = bakeries.find((b) => b.id === OUR_BAKERY_ID);
+      if (!ours) { await message.channel.send("Couldn't find our bakery."); return; }
+
+      const buffLines = ours.activeBuffs.map((b) =>
+        `⬆️ **${b.name}** · +${(b.multiplierBps / 100).toFixed(0)}% · expires <t:${b.endTime}:R>`
+      );
+      const debuffLines = ours.activeDebuffs.map((d) =>
+        `🔻 **${d.name}** · -${(d.debuffBps / 100).toFixed(0)}% · expires <t:${d.endTime}:R>`
+      );
+
+      const desc = [
+        buffLines.length ? `**Buffs (${buffLines.length})**\n${buffLines.join("\n")}` : "**Buffs** — none",
+        debuffLines.length ? `**Debuffs (${debuffLines.length})**\n${debuffLines.join("\n")}` : "**Debuffs** — none",
+      ].join("\n\n");
+
+      const embed = new EmbedBuilder()
+        .setTitle("🍰 Cockring Cakehouse — Active Effects")
+        .setDescription(desc)
+        .setColor(0xf5a623)
+        .setTimestamp();
+      await message.channel.send({ embeds: [embed] });
+    } catch {
+      await message.channel.send("Failed to fetch buff data.");
+    }
   }
 });
 

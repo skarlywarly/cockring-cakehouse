@@ -147,6 +147,7 @@ async function postLeaderboard(channel: TextChannel): Promise<void> {
       fetchTopBakeries(),
       fetchSeasonInfo(),
     ]);
+    top5Ids = new Set(bakeries.map((b) => b.id));
     const embed = buildLeaderboardEmbed(bakeries, prizePoolStr, endTime);
     await channel.send({ embeds: [embed] });
   } catch (err) {
@@ -179,6 +180,7 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+let top5Ids = new Set<number>([OUR_BAKERY_ID]);
 let lastSeenTimestamp = "0";
 let polling = false;
 
@@ -200,7 +202,7 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
     const relevant = events
       .filter(
         (e) =>
-          e.eventBakeryId === OUR_BAKERY_ID &&
+          top5Ids.has(e.eventBakeryId) &&
           (e.type === "boost" || e.type === "rug") &&
           e.timestamp > lastSeenTimestamp &&
           e.timestamp >= oneMinuteAgo
@@ -213,7 +215,7 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
       const icon = e.type === "boost" ? "⬆️" : "🔻";
       const status = e.success ? "✅" : "❌";
       const who = usernames.get(e.user) ?? shortAddr(e.user);
-      const from = e.bakeryId !== OUR_BAKERY_ID ? ` (from **${e.bakeryName}**)` : "";
+      const from = e.bakeryId !== e.eventBakeryId ? ` (from **${e.bakeryName}**)` : "";
       const bps = e.boostMultiplierBps ? `${(e.boostMultiplierBps / 100).toFixed(0)}%` : "";
       const embed = new EmbedBuilder()
         .setDescription(

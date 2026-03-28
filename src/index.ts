@@ -67,25 +67,46 @@ const client = new Client({
 
 async function fetchTopBakeries(): Promise<Bakery[]> {
   const res = await fetch(API_URL);
-  if (!res.ok) throw new Error(`API returned ${res.status}`);
+  if (!res.ok) { res.body?.cancel(); throw new Error(`API returned ${res.status}`); }
   const data = (await res.json()) as TrpcBatchResponse[];
   return data[0].result.data.json.items.slice(0, 5);
 }
 
+let cachedEthPrice = 0;
+let ethPriceFetchedAt = 0;
+const ETH_PRICE_TTL = 5 * 60 * 1000;
+
+async function getEthPrice(): Promise<number> {
+  if (cachedEthPrice > 0 && Date.now() - ethPriceFetchedAt < ETH_PRICE_TTL) {
+    return cachedEthPrice;
+  }
+  const res = await fetch(ETH_PRICE_URL);
+  if (!res.ok) {
+    res.body?.cancel();
+    if (cachedEthPrice > 0) return cachedEthPrice;
+    throw new Error(`CoinGecko returned ${res.status}`);
+  }
+  const data = (await res.json()) as { ethereum: { usd: number } };
+  cachedEthPrice = data.ethereum.usd;
+  ethPriceFetchedAt = Date.now();
+  return cachedEthPrice;
+}
+
 async function fetchSeasonInfo(): Promise<{ prizePoolStr: string; endTime: string }> {
-  const [seasonRes, priceRes] = await Promise.all([
+  const [seasonRes, ethPrice] = await Promise.all([
     fetch(SEASON_API_URL),
-    fetch(ETH_PRICE_URL),
+    getEthPrice(),
   ]);
+  if (!seasonRes.ok) {
+    seasonRes.body?.cancel();
+    throw new Error(`Season API returned ${seasonRes.status}`);
+  }
   const seasonData = (await seasonRes.json()) as {
     result: { data: { json: { prizePool: string; endTime: string }[] } };
   }[];
-  const priceData = (await priceRes.json()) as {
-    ethereum: { usd: number };
-  };
   const season = seasonData[0].result.data.json[0];
   const eth = Number(BigInt(season.prizePool)) / 1e18;
-  const usd = eth * priceData.ethereum.usd;
+  const usd = eth * ethPrice;
   const prizePoolStr = `${eth.toFixed(2)} ETH ($${usd.toLocaleString("en-US", { maximumFractionDigits: 0 })})`;
   return { prizePoolStr, endTime: season.endTime };
 }
@@ -108,7 +129,7 @@ function buildLeaderboardEmbed(bakeries: Bakery[], prizePool: string, endTime: s
           : String(cookies);
     return [
       `${medal} **${b.name}** — ${rateStr}`,
-      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount} · 🧑‍🍳 ${b.activeCookCount} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
+      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount} · 🧑‍🍳 ${b.activeCookCount} @ ${(b.activeCookCount * rate).toFixed(1)} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
     ].join("\n");
   });
 
@@ -142,7 +163,7 @@ async function resolveUsernames(addresses: string[]): Promise<Map<string, string
   const url = `https://www.rugpullbakery.com/api/trpc/profiles.getByAddresses?batch=1&input=${encoded}`;
   try {
     const res = await fetch(url);
-    if (!res.ok) return map;
+    if (!res.ok) { res.body?.cancel(); return map; }
     const data = (await res.json()) as {
       result: { data: { json: { address: string; profile: { name: string } | null }[] } };
     }[];
@@ -159,20 +180,30 @@ function shortAddr(addr: string): string {
 }
 
 let lastSeenTimestamp = "0";
+let polling = false;
 
 async function pollActivityFeed(channel: TextChannel): Promise<void> {
+  if (polling) return;
+  polling = true;
   try {
     const res = await fetch(ACTIVITY_FEED_URL);
-    if (!res.ok) return;
+    if (!res.ok) {
+      res.body?.cancel();
+      return;
+    }
     const data = (await res.json()) as { result: { data: { json: FeedEvent[] } } }[];
     const events = data[0].result.data.json;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const oneMinuteAgo = String(nowSec - 60);
 
     const relevant = events
       .filter(
         (e) =>
           e.eventBakeryId === OUR_BAKERY_ID &&
           (e.type === "boost" || e.type === "rug") &&
-          e.timestamp > lastSeenTimestamp
+          e.timestamp > lastSeenTimestamp &&
+          e.timestamp >= oneMinuteAgo
       )
       .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 
@@ -194,43 +225,40 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
       await channel.send({ embeds: [embed] });
     }
 
-    if (relevant.length > 0) {
-      lastSeenTimestamp = relevant[relevant.length - 1].timestamp;
-    } else if (lastSeenTimestamp === "0" && events.length > 0) {
-      lastSeenTimestamp = events[0].timestamp;
-    }
+    const maxTimestamp = events.reduce(
+      (max, e) => (e.timestamp > max ? e.timestamp : max),
+      lastSeenTimestamp
+    );
+    lastSeenTimestamp = maxTimestamp;
   } catch (err) {
     console.error("Failed to poll activity feed:", err);
+  } finally {
+    polling = false;
   }
 }
 
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
   const channelId = process.env.CHANNEL_ID;
-  if (channelId) {
-    const postScheduled = async () => {
-      const channel = await client.channels.fetch(channelId).catch(() => null);
-      if (channel?.isTextBased() && "send" in channel) {
-        await postLeaderboard(channel as TextChannel);
-      }
-    };
-
-    const startFeed = async () => {
-      const channel = await client.channels.fetch(channelId).catch(() => null);
-      if (channel?.isTextBased() && "send" in channel) {
-        // Set baseline so we don't replay old events on startup
-        await pollActivityFeed(channel as TextChannel);
-        setInterval(() => pollActivityFeed(channel as TextChannel), FEED_POLL_MS);
-      }
-    };
-
-    postScheduled();
-    startFeed();
-    setInterval(postScheduled, ONE_HOUR_MS);
-  } else {
+  if (!channelId) {
     console.warn("CHANNEL_ID not set — scheduled posts disabled.");
+    return;
   }
+
+  const raw = await client.channels.fetch(channelId).catch(() => null);
+  if (!raw?.isTextBased() || !("send" in raw)) {
+    console.warn("CHANNEL_ID does not point to a valid text channel.");
+    return;
+  }
+  const channel = raw as TextChannel;
+
+  postLeaderboard(channel);
+  setInterval(() => postLeaderboard(channel), ONE_HOUR_MS);
+
+  // Set baseline so we don't replay old events on startup
+  await pollActivityFeed(channel);
+  setInterval(() => pollActivityFeed(channel), FEED_POLL_MS);
 });
 
 client.on("messageCreate", async (message) => {

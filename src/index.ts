@@ -16,6 +16,26 @@ const ETH_PRICE_URL =
   "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
+const FEED_POLL_MS = 30 * 1000;
+const OUR_BAKERY_ID = 58;
+
+const ACTIVITY_FEED_URL =
+  "https://www.rugpullbakery.com/api/trpc/leaderboard.getGlobalActivityFeed?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22limit%22%3A20%7D%7D%7D";
+
+interface FeedEvent {
+  type: string;
+  user: string;
+  bakeryId: number;
+  bakeryName: string;
+  eventBakeryId: number;
+  eventBakeryName: string;
+  event: string;
+  timestamp: string;
+  boostTypeName: string | null;
+  boostMultiplierBps: number | null;
+  boostDuration: string | null;
+  success: boolean | null;
+}
 
 interface Bakery {
   id: number;
@@ -114,6 +134,76 @@ async function postLeaderboard(channel: TextChannel): Promise<void> {
   }
 }
 
+async function resolveUsernames(addresses: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (addresses.length === 0) return map;
+  const unique = [...new Set(addresses)];
+  const encoded = encodeURIComponent(JSON.stringify({ "0": { json: { addresses: unique } } }));
+  const url = `https://www.rugpullbakery.com/api/trpc/profiles.getByAddresses?batch=1&input=${encoded}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return map;
+    const data = (await res.json()) as {
+      result: { data: { json: { address: string; profile: { name: string } | null }[] } };
+    }[];
+    for (const entry of data[0].result.data.json) {
+      const name = entry.profile?.name;
+      if (name) map.set(entry.address, name);
+    }
+  } catch { /* fall back to truncated addresses */ }
+  return map;
+}
+
+function shortAddr(addr: string): string {
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+let lastSeenTimestamp = "0";
+
+async function pollActivityFeed(channel: TextChannel): Promise<void> {
+  try {
+    const res = await fetch(ACTIVITY_FEED_URL);
+    if (!res.ok) return;
+    const data = (await res.json()) as { result: { data: { json: FeedEvent[] } } }[];
+    const events = data[0].result.data.json;
+
+    const relevant = events
+      .filter(
+        (e) =>
+          e.eventBakeryId === OUR_BAKERY_ID &&
+          (e.type === "boost" || e.type === "rug") &&
+          e.timestamp > lastSeenTimestamp
+      )
+      .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
+
+    const usernames = await resolveUsernames(relevant.map((e) => e.user));
+
+    for (const e of relevant) {
+      const icon = e.type === "boost" ? "⬆️" : "🔻";
+      const status = e.success ? "✅" : "❌";
+      const who = usernames.get(e.user) ?? shortAddr(e.user);
+      const from = e.bakeryId !== OUR_BAKERY_ID ? ` (from **${e.bakeryName}**)` : "";
+      const bps = e.boostMultiplierBps ? `${(e.boostMultiplierBps / 100).toFixed(0)}%` : "";
+      const embed = new EmbedBuilder()
+        .setDescription(
+          `${icon} ${status} **${who}** ${e.event} ${e.eventBakeryName}${from}\n` +
+          `${e.boostTypeName ?? "Unknown"} · ${bps} · <t:${e.timestamp}:R>`
+        )
+        .setColor(e.type === "boost" ? 0x2ecc71 : 0xe74c3c)
+        .setTimestamp();
+      await channel.send({ embeds: [embed] });
+    }
+
+    if (relevant.length > 0) {
+      lastSeenTimestamp = relevant[relevant.length - 1].timestamp;
+    } else if (lastSeenTimestamp === "0" && events.length > 0) {
+      lastSeenTimestamp = events[0].timestamp;
+    }
+  } catch (err) {
+    console.error("Failed to poll activity feed:", err);
+  }
+}
+
 client.once("ready", () => {
   console.log(`Logged in as ${client.user?.tag}`);
 
@@ -126,7 +216,17 @@ client.once("ready", () => {
       }
     };
 
+    const startFeed = async () => {
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (channel?.isTextBased() && "send" in channel) {
+        // Set baseline so we don't replay old events on startup
+        await pollActivityFeed(channel as TextChannel);
+        setInterval(() => pollActivityFeed(channel as TextChannel), FEED_POLL_MS);
+      }
+    };
+
     postScheduled();
+    startFeed();
     setInterval(postScheduled, ONE_HOUR_MS);
   } else {
     console.warn("CHANNEL_ID not set — scheduled posts disabled.");

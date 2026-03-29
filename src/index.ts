@@ -67,7 +67,10 @@ const client = new Client({
 
 async function fetchTopBakeries(): Promise<Bakery[]> {
   const res = await fetch(API_URL);
-  if (!res.ok) { res.body?.cancel(); throw new Error(`API returned ${res.status}`); }
+  if (!res.ok) {
+    res.body?.cancel();
+    throw new Error(`API returned ${res.status}`);
+  }
   const data = (await res.json()) as TrpcBatchResponse[];
   return data[0].result.data.json.items.slice(0, 5);
 }
@@ -92,7 +95,10 @@ async function getEthPrice(): Promise<number> {
   return cachedEthPrice;
 }
 
-async function fetchSeasonInfo(): Promise<{ prizePoolStr: string; endTime: string }> {
+async function fetchSeasonInfo(): Promise<{
+  prizePoolStr: string;
+  endTime: string;
+}> {
   const [seasonRes, ethPrice] = await Promise.all([
     fetch(SEASON_API_URL),
     getEthPrice(),
@@ -111,7 +117,11 @@ async function fetchSeasonInfo(): Promise<{ prizePoolStr: string; endTime: strin
   return { prizePoolStr, endTime: season.endTime };
 }
 
-function buildLeaderboardEmbed(bakeries: Bakery[], prizePool: string, endTime: string): EmbedBuilder {
+function buildLeaderboardEmbed(
+  bakeries: Bakery[],
+  prizePool: string,
+  endTime: string,
+): EmbedBuilder {
   const medals = ["🥇", "🥈", "🥉", "4.", "5."];
 
   const lines = bakeries.map((b, i) => {
@@ -137,7 +147,9 @@ function buildLeaderboardEmbed(bakeries: Bakery[], prizePool: string, endTime: s
 
   return new EmbedBuilder()
     .setTitle("🍰 Top 5 Bakeries")
-    .setDescription(`💰 Prize Pool: **${prizePool}**\n⏰ Season Ends: <t:${endTime}:R>\n\n${lines.join("\n\n") || "No data available."}`)
+    .setDescription(
+      `💰 Prize Pool: **${prizePool}**\n⏰ Season Ends: <t:${endTime}:R>\n\n${lines.join("\n\n") || "No data available."}`,
+    )
     .setColor(0xf5a623)
     .setFooter({ text: "rugpullbakery.com" })
     .setTimestamp();
@@ -154,27 +166,40 @@ async function postLeaderboard(channel: TextChannel): Promise<void> {
     await channel.send({ embeds: [embed] });
   } catch (err) {
     console.error("Failed to fetch leaderboard:", err);
-    await channel.send("Failed to fetch the leaderboard. Try again later.");
+    try {
+      await channel.send("Failed to fetch the leaderboard. Try again later.");
+    } catch {}
   }
 }
 
-async function resolveUsernames(addresses: string[]): Promise<Map<string, string>> {
+async function resolveUsernames(
+  addresses: string[],
+): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (addresses.length === 0) return map;
   const unique = [...new Set(addresses)];
-  const encoded = encodeURIComponent(JSON.stringify({ "0": { json: { addresses: unique } } }));
+  const encoded = encodeURIComponent(
+    JSON.stringify({ "0": { json: { addresses: unique } } }),
+  );
   const url = `https://www.rugpullbakery.com/api/trpc/profiles.getByAddresses?batch=1&input=${encoded}`;
   try {
     const res = await fetch(url);
-    if (!res.ok) { res.body?.cancel(); return map; }
+    if (!res.ok) {
+      res.body?.cancel();
+      return map;
+    }
     const data = (await res.json()) as {
-      result: { data: { json: { address: string; profile: { name: string } | null }[] } };
+      result: {
+        data: { json: { address: string; profile: { name: string } | null }[] };
+      };
     }[];
     for (const entry of data[0].result.data.json) {
       const name = entry.profile?.name;
       if (name) map.set(entry.address, name);
     }
-  } catch { /* fall back to truncated addresses */ }
+  } catch {
+    /* fall back to truncated addresses */
+  }
   return map;
 }
 
@@ -195,7 +220,9 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
       res.body?.cancel();
       return;
     }
-    const data = (await res.json()) as { result: { data: { json: FeedEvent[] } } }[];
+    const data = (await res.json()) as {
+      result: { data: { json: FeedEvent[] } };
+    }[];
     const events = data[0].result.data.json;
 
     const nowSec = Math.floor(Date.now() / 1000);
@@ -207,7 +234,7 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
           top5Ids.has(e.eventBakeryId) &&
           (e.type === "boost" || e.type === "rug") &&
           e.timestamp > lastSeenTimestamp &&
-          e.timestamp >= oneMinuteAgo
+          e.timestamp >= oneMinuteAgo,
       )
       .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 
@@ -217,12 +244,15 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
       const icon = e.type === "boost" ? "⬆️" : "🔻";
       const status = e.success ? "✅" : "❌";
       const who = usernames.get(e.user) ?? shortAddr(e.user);
-      const from = e.bakeryId !== e.eventBakeryId ? ` (from **${e.bakeryName}**)` : "";
-      const bps = e.boostMultiplierBps ? `${(e.boostMultiplierBps / 100).toFixed(0)}%` : "";
+      const from =
+        e.bakeryId !== e.eventBakeryId ? ` (from **${e.bakeryName}**)` : "";
+      const bps = e.boostMultiplierBps
+        ? `${(e.boostMultiplierBps / 100).toFixed(0)}%`
+        : "";
       const embed = new EmbedBuilder()
         .setDescription(
           `${icon} ${status} **${who}** ${e.event} ${e.eventBakeryName}${from}\n` +
-          `${e.boostTypeName ?? "Unknown"} · ${bps} · <t:${e.timestamp}:R>`
+            `${e.boostTypeName ?? "Unknown"} · ${bps} · <t:${e.timestamp}:R>`,
         )
         .setColor(e.type === "boost" ? 0x2ecc71 : 0xe74c3c)
         .setTimestamp();
@@ -231,7 +261,7 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
 
     const maxTimestamp = events.reduce(
       (max, e) => (e.timestamp > max ? e.timestamp : max),
-      lastSeenTimestamp
+      lastSeenTimestamp,
     );
     lastSeenTimestamp = maxTimestamp;
   } catch (err) {
@@ -252,7 +282,11 @@ async function checkExpiringSoon(channel: TextChannel): Promise<void> {
     const nowSec = Math.floor(Date.now() / 1000);
     const fiveMin = 5 * 60;
 
-    const expiring: { name: string; type: "buff" | "debuff"; endTime: string }[] = [];
+    const expiring: {
+      name: string;
+      type: "buff" | "debuff";
+      endTime: string;
+    }[] = [];
 
     for (const buff of ours.activeBuffs) {
       const end = Number(buff.endTime);
@@ -267,7 +301,11 @@ async function checkExpiringSoon(channel: TextChannel): Promise<void> {
       const end = Number(debuff.endTime);
       const key = `debuff:${debuff.name}:${debuff.endTime}`;
       if (end > nowSec && end - nowSec <= fiveMin && !warnedExpiries.has(key)) {
-        expiring.push({ name: debuff.name, type: "debuff", endTime: debuff.endTime });
+        expiring.push({
+          name: debuff.name,
+          type: "debuff",
+          endTime: debuff.endTime,
+        });
         warnedExpiries.add(key);
       }
     }
@@ -276,7 +314,9 @@ async function checkExpiringSoon(channel: TextChannel): Promise<void> {
       const icon = e.type === "buff" ? "⚠️ ⬆️" : "⚠️ 🔻";
       const label = e.type === "buff" ? "Buff" : "Debuff";
       const embed = new EmbedBuilder()
-        .setDescription(`${icon} ${label} **${e.name}** expiring <t:${e.endTime}:R>`)
+        .setDescription(
+          `${icon} ${label} **${e.name}** expiring <t:${e.endTime}:R>`,
+        )
         .setColor(e.type === "buff" ? 0xf39c12 : 0x27ae60)
         .setTimestamp();
       await channel.send({ embeds: [embed] });
@@ -288,6 +328,17 @@ async function checkExpiringSoon(channel: TextChannel): Promise<void> {
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user?.tag}`);
+
+  const readyMessages = [
+    "🍰 Ready to cook! Let's bake some cakes.",
+    "🧑‍🍳 Oven preheated. Time to rise!",
+    "🍪 Bakery bot reporting for duty!",
+    "🔥 Fired up and ready to roll some dough.",
+    "🎂 Let them eat cake — bot is live!",
+  ];
+  const readyMsg =
+    readyMessages[Math.floor(Math.random() * readyMessages.length)];
+  console.log(readyMsg);
 
   const channelId = process.env.CHANNEL_ID;
   if (!channelId) {
@@ -301,6 +352,8 @@ client.once("ready", async () => {
     return;
   }
   const channel = raw as TextChannel;
+
+  await channel.send(readyMsg);
 
   postLeaderboard(channel);
   setInterval(() => postLeaderboard(channel), ONE_HOUR_MS);
@@ -318,25 +371,38 @@ client.on("messageCreate", async (message) => {
   if (cmd === "!lb") {
     await postLeaderboard(message.channel as TextChannel);
   } else if (cmd === "!join") {
-    await message.channel.send("https://x.com/Skarly/status/2037208078144463181");
+    await message.channel.send(
+      "https://x.com/Skarly/status/2037208078144463181",
+    );
   } else if (cmd === "!git") {
-    await message.channel.send("https://github.com/skarlywarly/cockring-cakehouse");
+    await message.channel.send(
+      "https://github.com/skarlywarly/cockring-cakehouse",
+    );
   } else if (cmd === "!buffs" || cmd === "!b") {
     try {
       const bakeries = await fetchTopBakeries();
       const ours = bakeries.find((b) => b.id === OUR_BAKERY_ID);
-      if (!ours) { await message.channel.send("Couldn't find our bakery."); return; }
+      if (!ours) {
+        await message.channel.send("Couldn't find our bakery.");
+        return;
+      }
 
-      const buffLines = ours.activeBuffs.map((b) =>
-        `⬆️ **${b.name}** · +${(b.multiplierBps / 100).toFixed(0)}% · expires <t:${b.endTime}:R>`
+      const buffLines = ours.activeBuffs.map(
+        (b) =>
+          `⬆️ **${b.name}** · +${(b.multiplierBps / 100).toFixed(0)}% · expires <t:${b.endTime}:R>`,
       );
-      const debuffLines = ours.activeDebuffs.map((d) =>
-        `🔻 **${d.name}** · -${(d.debuffBps / 100).toFixed(0)}% · expires <t:${d.endTime}:R>`
+      const debuffLines = ours.activeDebuffs.map(
+        (d) =>
+          `🔻 **${d.name}** · -${(d.debuffBps / 100).toFixed(0)}% · expires <t:${d.endTime}:R>`,
       );
 
       const desc = [
-        buffLines.length ? `**Buffs (${buffLines.length})**\n${buffLines.join("\n")}` : "**Buffs** — none",
-        debuffLines.length ? `**Debuffs (${debuffLines.length})**\n${debuffLines.join("\n")}` : "**Debuffs** — none",
+        buffLines.length
+          ? `**Buffs (${buffLines.length})**\n${buffLines.join("\n")}`
+          : "**Buffs** — none",
+        debuffLines.length
+          ? `**Debuffs (${debuffLines.length})**\n${debuffLines.join("\n")}`
+          : "**Debuffs** — none",
       ].join("\n\n");
 
       const embed = new EmbedBuilder()

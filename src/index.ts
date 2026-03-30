@@ -161,7 +161,6 @@ async function postLeaderboard(channel: TextChannel): Promise<void> {
       fetchTopBakeries(),
       fetchSeasonInfo(),
     ]);
-    top5Ids = new Set(bakeries.map((b) => b.id));
     const embed = buildLeaderboardEmbed(bakeries, prizePoolStr, endTime);
     await channel.send({ embeds: [embed] });
   } catch (err) {
@@ -207,7 +206,6 @@ function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-let top5Ids = new Set<number>([OUR_BAKERY_ID]);
 let lastSeenTimestamp = "0";
 let polling = false;
 
@@ -231,7 +229,7 @@ async function pollActivityFeed(channel: TextChannel): Promise<void> {
     const relevant = events
       .filter(
         (e) =>
-          top5Ids.has(e.eventBakeryId) &&
+          e.eventBakeryId === OUR_BAKERY_ID &&
           (e.type === "boost" || e.type === "rug") &&
           e.timestamp > lastSeenTimestamp &&
           e.timestamp >= oneMinuteAgo,

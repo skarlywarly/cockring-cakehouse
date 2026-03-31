@@ -9,6 +9,9 @@ import {
 const API_URL =
   "https://www.rugpullbakery.com/api/trpc/leaderboard.getTopBakeries?batch=1&input=%7B%220%22%3A%7B%22json%22%3A%7B%22limit%22%3A15%7D%7D%7D";
 
+const DECORATIONS_BASE_URL =
+  "https://www.rugpullbakery.com/api/trpc/leaderboard.getTopBakeryDecorations,profiles.getByAddresses?batch=1&input=";
+
 const SEASON_API_URL =
   "https://www.rugpullbakery.com/api/trpc/leaderboard.getActiveSeason?batch=1&input=%7B%220%22%3A%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D%2C%22v%22%3A1%7D%7D%7D";
 
@@ -37,24 +40,32 @@ interface FeedEvent {
   success: boolean | null;
 }
 
+interface BakeryBase {
+  id: number;
+  name: string;
+  memberCount: number;
+  txCount: string;
+  seasonId: number;
+  creator: string;
+  leader: string;
+  topCook: string;
+}
+
+interface BakeryDecoration {
+  bakeryId: number;
+  activeCookCount: number;
+  activeBuffs: { name: string; multiplierBps: number; isShield: boolean; endTime: string }[];
+  activeDebuffs: { name: string; debuffBps: number; endTime: string }[];
+}
+
 interface Bakery {
   id: number;
   name: string;
   memberCount: number;
-  activeCookCount: number | null;
   txCount: string;
-  activeBuffs: { name: string; multiplierBps: number; endTime: string }[];
+  activeCookCount: number;
+  activeBuffs: { name: string; multiplierBps: number; isShield: boolean; endTime: string }[];
   activeDebuffs: { name: string; debuffBps: number; endTime: string }[];
-}
-
-interface TrpcBatchResponse {
-  result: {
-    data: {
-      json: {
-        items: Bakery[];
-      };
-    };
-  };
 }
 
 const client = new Client({
@@ -71,8 +82,55 @@ async function fetchTopBakeries(): Promise<Bakery[]> {
     res.body?.cancel();
     throw new Error(`API returned ${res.status}`);
   }
-  const data = (await res.json()) as TrpcBatchResponse[];
-  return data[0].result.data.json.items.slice(0, 5);
+  const data = (await res.json()) as {
+    result: { data: { json: { items: BakeryBase[] } } };
+  }[];
+  const bases = data[0].result.data.json.items;
+
+  const seasonId = bases[0]?.seasonId ?? 3;
+  const bakeryIds = bases.map((b) => b.id);
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const addresses = [
+    ...new Set(
+      bases.flatMap((b) =>
+        [b.creator, b.leader, b.topCook].filter((a) => a && a !== ZERO),
+      ),
+    ),
+  ];
+
+  const input = encodeURIComponent(
+    JSON.stringify({
+      "0": { json: { seasonId, bakeryIds } },
+      "1": { json: { addresses } },
+    }),
+  );
+  const decorRes = await fetch(`${DECORATIONS_BASE_URL}${input}`);
+  if (!decorRes.ok) {
+    decorRes.body?.cancel();
+    throw new Error(`Decorations API returned ${decorRes.status}`);
+  }
+  const decorData = (await decorRes.json()) as [
+    { result: { data: { json: BakeryDecoration[] } } },
+    unknown,
+  ];
+
+  const decorMap = new Map<number, BakeryDecoration>();
+  for (const d of decorData[0].result.data.json) {
+    decorMap.set(d.bakeryId, d);
+  }
+
+  return bases.map((b) => {
+    const decor = decorMap.get(b.id);
+    return {
+      id: b.id,
+      name: b.name,
+      memberCount: b.memberCount,
+      txCount: b.txCount,
+      activeCookCount: decor?.activeCookCount ?? 0,
+      activeBuffs: decor?.activeBuffs ?? [],
+      activeDebuffs: decor?.activeDebuffs ?? [],
+    };
+  });
 }
 
 let cachedEthPrice = 0;
@@ -141,7 +199,7 @@ function buildLeaderboardEmbed(
           : String(cookies);
     return [
       `${medal} **${b.name}** — ${rateStr}`,
-      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount}${b.activeCookCount != null ? ` · 🧑‍🍳 ${b.activeCookCount} @ ${(b.activeCookCount * rate).toFixed(1)}` : ""} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
+      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount} · 🧑‍🍳 ${b.activeCookCount} @ ${(b.activeCookCount * rate).toFixed(1)} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
     ].join("\n");
   });
 
@@ -161,7 +219,7 @@ async function postLeaderboard(channel: TextChannel): Promise<void> {
       fetchTopBakeries(),
       fetchSeasonInfo(),
     ]);
-    const embed = buildLeaderboardEmbed(bakeries, prizePoolStr, endTime);
+    const embed = buildLeaderboardEmbed(bakeries.slice(0, 5), prizePoolStr, endTime);
     await channel.send({ embeds: [embed] });
   } catch (err) {
     console.error("Failed to fetch leaderboard:", err);

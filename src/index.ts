@@ -41,7 +41,7 @@ interface Bakery {
   id: number;
   name: string;
   memberCount: number;
-  activeCookCount: number;
+  activeCookCount: number | null;
   txCount: string;
   activeBuffs: { name: string; multiplierBps: number; endTime: string }[];
   activeDebuffs: { name: string; debuffBps: number; endTime: string }[];
@@ -141,7 +141,7 @@ function buildLeaderboardEmbed(
           : String(cookies);
     return [
       `${medal} **${b.name}** — ${rateStr}`,
-      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount} · 🧑‍🍳 ${b.activeCookCount} @ ${(b.activeCookCount * rate).toFixed(1)} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
+      `╰ 🍪 ${cookiesStr} · 👥 ${b.memberCount}${b.activeCookCount != null ? ` · 🧑‍🍳 ${b.activeCookCount} @ ${(b.activeCookCount * rate).toFixed(1)}` : ""} · ⬆${b.activeBuffs.length} ⬇${b.activeDebuffs.length}`,
     ].join("\n");
   });
 

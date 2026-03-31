@@ -72,7 +72,13 @@ async function fetchTopBakeries(): Promise<Bakery[]> {
     throw new Error(`API returned ${res.status}`);
   }
   const data = (await res.json()) as TrpcBatchResponse[];
-  return data[0].result.data.json.items.slice(0, 5);
+  const items = data[0].result.data.json.items.slice(0, 5);
+  return items.map((b) => ({
+    ...b,
+    activeCookCount: b.activeCookCount ?? 0,
+    activeBuffs: b.activeBuffs ?? [],
+    activeDebuffs: b.activeDebuffs ?? [],
+  }));
 }
 
 let cachedEthPrice = 0;
